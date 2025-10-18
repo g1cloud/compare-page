@@ -1,21 +1,15 @@
 import { chromium } from 'playwright';
 import { JSDOM } from 'jsdom';
+import fs from 'fs/promises';
 
-type ExclusionMap = Map<string, Set<string>>;
+type AttrExclusionMap = Map<string, Set<string>>;
+type RegexExclusionRule = { tag: string; attribute: string; regex: RegExp; };
 
-/**
- * Parses a comma-separated string of tag:attribute pairs into a structured Map.
- * @param excludeStr The string from the --exclude-attrs option.
- * @returns A Map where keys are tag names and values are Sets of attributes to exclude.
- */
-function parseExcludeAttrs(excludeStr?: string): ExclusionMap {
-  const exclusions: ExclusionMap = new Map();
-  if (!excludeStr) {
-    return exclusions;
-  }
+function parseExcludeAttrs(excludeStr?: string): AttrExclusionMap {
+  const exclusions: AttrExclusionMap = new Map();
+  if (!excludeStr) return exclusions;
 
-  const pairs = excludeStr.split(',');
-  for (const pair of pairs) {
+  for (const pair of excludeStr.split(',')) {
     const [tag, attr] = pair.split(':');
     if (tag && attr) {
       const tagName = tag.toUpperCase();
@@ -28,94 +22,101 @@ function parseExcludeAttrs(excludeStr?: string): ExclusionMap {
   return exclusions;
 }
 
-/**
- * Recursively compares two DOM nodes to see if their structure is identical.
- */
-function compareNodes(nodeA: Node, nodeB: Node, path: string, exclusions: ExclusionMap): boolean {
-  let areStructuresIdentical = true;
+function parseExcludeAttrRegex(regexRules?: string[]): RegexExclusionRule[] {
+  const rules: RegexExclusionRule[] = [];
+  if (!regexRules) return rules;
 
-  const childrenA = Array.from(nodeA.childNodes).filter(n => n.nodeType === 1) as Element[];
-  const childrenB = Array.from(nodeB.childNodes).filter(n => n.nodeType === 1) as Element[];
-
-  if (childrenA.length !== childrenB.length) {
-    console.error(`❌ Difference found: Different number of child elements at path "${path}".`);
-    console.error(`   - URL A has ${childrenA.length} children, URL B has ${childrenB.length}.`);
-    return false;
-  }
-
-  for (let i = 0; i < childrenA.length; i++) {
-    const childA = childrenA[i];
-    const childB = childrenB[i];
-    const currentPath = `${path} > ${childA.tagName.toLowerCase()}:nth-child(${i + 1})`;
-
-    let isCurrentNodeIdentical = true;
-
-    if (childA.tagName !== childB.tagName) {
-      console.error(`❌ Difference found: Different tag names at path "${path}".`);
-      console.error(`   - URL A: <${childA.tagName.toLowerCase()}>, URL B: <${childB.tagName.toLowerCase()}>`);
-      isCurrentNodeIdentical = false;
+  for (const rule of regexRules) {
+    const parts = rule.split(':');
+    if (parts.length === 3) {
+      const [tag, attribute, regex] = parts;
+      try {
+        rules.push({ tag: tag.toUpperCase(), attribute, regex: new RegExp(regex) });
+      } catch (e) {
+        console.error(`Skipping invalid regex rule "${rule}": ${(e as Error).message}`);
+      }
     }
+  }
+  return rules;
+}
 
-    const attributeFilter = (attr: Attr) => {
+function buildFilteredTreeString(node: Node, level: number, attrExclusions: AttrExclusionMap, regexExclusions: RegexExclusionRule[]): string {
+  let result = '';
+  const children = Array.from(node.childNodes).filter(n => n.nodeType === 1) as Element[];
+
+  for (const child of children) {
+    const indentation = '  '.repeat(level);
+    const tagName = child.tagName.toLowerCase();
+
+    const attributeFilter = (attr: Attr): boolean => {
+      if (attr.value === '') return false;
       if (attr.name.startsWith('data-') || attr.name.startsWith('aria-')) return false;
-      const tagExclusions = exclusions.get(childA.tagName);
+
+      const tagExclusions = attrExclusions.get(child.tagName);
       if (tagExclusions && tagExclusions.has(attr.name)) return false;
+
+      for (const rule of regexExclusions) {
+        if ((rule.tag === '*' || rule.tag === child.tagName) && rule.attribute === attr.name) {
+          if (rule.regex.test(attr.value)) return false;
+        }
+      }
+
       return true;
     };
 
-    const attrsA = Array.from(childA.attributes).filter(attributeFilter).sort((a, b) => a.name.localeCompare(b.name));
-    const attrsB = Array.from(childB.attributes).filter(attributeFilter).sort((a, b) => a.name.localeCompare(b.name));
+    const attrs = Array.from(child.attributes)
+      .filter(attributeFilter)
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map(attr => `${attr.name}="${attr.value}"`)
+      .join(' ');
 
-    if (attrsA.length !== attrsB.length) {
-      console.error(`❌ Difference found: Different number of attributes at path "${currentPath}".`);
-      console.error(`   - URL A has ${attrsA.length}, URL B has ${attrsB.length}.`);
-      isCurrentNodeIdentical = false;
-    } else {
-      for (let j = 0; j < attrsA.length; j++) {
-        if (attrsA[j].name !== attrsB[j].name || attrsA[j].value !== attrsB[j].value) {
-          console.error(`❌ Difference found: Different attributes at path "${currentPath}".`);
-          console.error(`   - URL A: ${attrsA[j].name}="${attrsA[j].value}"`);
-          console.error(`   - URL B: ${attrsB[j].name}="${attrsB[j].value}"`);
-          isCurrentNodeIdentical = false;
-        }
-      }
-    }
+    const hasChildren = child.children.length > 0;
+    const tagString = attrs ? `<${tagName} ${attrs}>` : `<${tagName}>`;
 
-    if (!compareNodes(childA, childB, currentPath, exclusions)) {
-      isCurrentNodeIdentical = false;
-    }
+    result += indentation + tagString + '\n';
 
-    if (!isCurrentNodeIdentical) {
-      areStructuresIdentical = false;
+    if (hasChildren) {
+      result += buildFilteredTreeString(child, level + 1, attrExclusions, regexExclusions);
     }
   }
-
-  return areStructuresIdentical;
+  return result;
 }
 
-function areStructuresEqual(htmlA: string, htmlB: string, selector: string, exclusions: ExclusionMap): boolean {
+async function processAndCompare(htmlA: string, htmlB: string, selector: string, excludeStr?: string, regexRules?: string[]): Promise<void> {
+  const attrExclusions = parseExcludeAttrs(excludeStr);
+  const regexExclusions = parseExcludeAttrRegex(regexRules);
+
   const domA = new JSDOM(htmlA);
   const domB = new JSDOM(htmlB);
-  return compareNodes(domA.window.document.body, domB.window.document.body, selector, exclusions);
-}
 
-function logComparisonResult(htmlA: string, htmlB: string, selector: string, excludeStr?: string): void {
-  const exclusions = parseExcludeAttrs(excludeStr);
-  if (areStructuresEqual(htmlA, htmlB, selector, exclusions)) {
+  const filteredHtmlA = buildFilteredTreeString(domA.window.document.body, 0, attrExclusions, regexExclusions);
+  const filteredHtmlB = buildFilteredTreeString(domB.window.document.body, 0, attrExclusions, regexExclusions);
+
+  await Promise.all([
+    fs.writeFile('compare_a.html', filteredHtmlA),
+    fs.writeFile('compare_b.html', filteredHtmlB),
+  ]);
+
+  if (filteredHtmlA === filteredHtmlB) {
     console.log(`✅ The HTML structure inside "${selector}" is identical (with specified exclusions).`);
+    console.log('   - Output files compare_a.html and compare_b.html are identical.');
   } else {
-    console.error(`
-Comparison finished. One or more structural differences were found.`);
+    console.error(`❌ The HTML structure inside "${selector}" is different.`);
+    console.error('   - Inspect the differences by comparing the generated files:');
+    console.error(
+      '     diff compare_a.html compare_b.html'
+    );
   }
 }
 
-export async function compareHtml(urlA: string, urlB: string, selector: string, excludeStr?: string): Promise<void> {
-  console.log(`Comparing HTML structure inside selector "${selector}" of:
-- ${urlA}
-- ${urlB}
-`);
+export async function compareHtml(urlA: string, urlB: string, selector: string, excludeStr?: string, regexRules?: string[]): Promise<void> {
+  console.log(`Comparing HTML structure inside selector "${selector}" of:\n- ${urlA}\n- ${urlB}\n`);
   if (excludeStr) {
     console.log(`Excluding attributes: ${excludeStr}`);
+  }
+  if (regexRules && regexRules.length > 0) {
+    console.log('Excluding attributes by regex:');
+    regexRules.forEach(rule => console.log(`  - ${rule}`))
   }
 
   const browser = await chromium.launch();
@@ -134,7 +135,7 @@ export async function compareHtml(urlA: string, urlB: string, selector: string, 
 
     const [htmlA, htmlB] = await Promise.all([getElementHtml(urlA), getElementHtml(urlB)]);
 
-    logComparisonResult(htmlA, htmlB, selector, excludeStr);
+    await processAndCompare(htmlA, htmlB, selector, excludeStr, regexRules);
 
   } catch (error) {
     if (error instanceof Error && error.message.includes('waiting for selector')) {
