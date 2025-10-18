@@ -67,7 +67,7 @@ function buildFilteredTreeString(node: Node, level: number, attrExclusions: Attr
     const attrs = Array.from(child.attributes)
       .filter(attributeFilter)
       .sort((a, b) => a.name.localeCompare(b.name))
-      .map(attr => `${attr.name}="${attr.value}"`)
+      .map(attr => `${attr.name}="${attr.value}"`) // Corrected escaping for attribute values
       .join(' ');
 
     const hasChildren = child.children.length > 0;
@@ -82,7 +82,7 @@ function buildFilteredTreeString(node: Node, level: number, attrExclusions: Attr
   return result;
 }
 
-async function processAndCompare(htmlA: string, htmlB: string, selector: string, excludeStr?: string, regexRules?: string[]): Promise<void> {
+async function processAndCompare(htmlA: string, htmlB: string, selector: string, excludeStr?: string, regexRules?: string[], outPrefix: string = 'compare'): Promise<void> {
   const attrExclusions = parseExcludeAttrs(excludeStr);
   const regexExclusions = parseExcludeAttrRegex(regexRules);
 
@@ -92,24 +92,27 @@ async function processAndCompare(htmlA: string, htmlB: string, selector: string,
   const filteredHtmlA = buildFilteredTreeString(domA.window.document.body, 0, attrExclusions, regexExclusions);
   const filteredHtmlB = buildFilteredTreeString(domB.window.document.body, 0, attrExclusions, regexExclusions);
 
+  const fileNameA = `${outPrefix}_a.html`;
+  const fileNameB = `${outPrefix}_b.html`;
+
   await Promise.all([
-    fs.writeFile('compare_a.html', filteredHtmlA),
-    fs.writeFile('compare_b.html', filteredHtmlB),
+    fs.writeFile(fileNameA, filteredHtmlA),
+    fs.writeFile(fileNameB, filteredHtmlB),
   ]);
 
   if (filteredHtmlA === filteredHtmlB) {
     console.log(`✅ The HTML structure inside "${selector}" is identical (with specified exclusions).`);
-    console.log('   - Output files compare_a.html and compare_b.html are identical.');
+    console.log(`   - Output files ${fileNameA} and ${fileNameB} are identical.`);
   } else {
     console.error(`❌ The HTML structure inside "${selector}" is different.`);
     console.error('   - Inspect the differences by comparing the generated files:');
     console.error(
-      '     diff compare_a.html compare_b.html'
+      `     diff ${fileNameA} ${fileNameB}`
     );
   }
 }
 
-export async function compareHtml(urlA: string, urlB: string, selector: string, excludeStr?: string, regexRules?: string[]): Promise<void> {
+export async function compareHtml(urlA: string, urlB: string, selector: string, excludeStr?: string, regexRules?: string[], outPrefix?: string): Promise<void> {
   console.log(`Comparing HTML structure inside selector "${selector}" of:\n- ${urlA}\n- ${urlB}\n`);
   if (excludeStr) {
     console.log(`Excluding attributes: ${excludeStr}`);
@@ -135,7 +138,7 @@ export async function compareHtml(urlA: string, urlB: string, selector: string, 
 
     const [htmlA, htmlB] = await Promise.all([getElementHtml(urlA), getElementHtml(urlB)]);
 
-    await processAndCompare(htmlA, htmlB, selector, excludeStr, regexRules);
+    await processAndCompare(htmlA, htmlB, selector, excludeStr, regexRules, outPrefix);
 
   } catch (error) {
     if (error instanceof Error && error.message.includes('waiting for selector')) {

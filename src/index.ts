@@ -15,8 +15,9 @@ program
   .option('-s, --selector <selector>', 'CSS selector for the element to compare', 'body')
   .option('--exclude-attrs <attributes>', 'Comma-separated list of tag:attribute pairs to exclude (e.g., img:src,img:alt)')
   .option('--exclude-attr-regex <rule...>', 'A tag:attribute:regex rule to exclude. Can be specified multiple times.')
+  .option('--out <prefix>', 'Prefix for the output file names', 'compare')
   .action((urlA, urlB, options) => {
-    compareHtml(urlA, urlB, options.selector, options.excludeAttrs, options.excludeAttrRegex);
+    compareHtml(urlA, urlB, options.selector, options.excludeAttrs, options.excludeAttrRegex, options.out);
   });
 
 program.parse(process.argv);
