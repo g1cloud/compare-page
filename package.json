@@ -1,5 +1,5 @@
 {
-  "name": "compare-page",
+  "name": "@g1cloud/compare-page",
   "version": "1.0.0",
   "description": "",
   "main": "dist/index.js",
