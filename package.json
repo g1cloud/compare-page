@@ -18,8 +18,11 @@
     "commander": "^14.0.1"
   },
   "devDependencies": {
+    "@types/jsdom": "^27.0.0",
     "@types/node": "^24.8.1",
     "esbuild": "^0.25.11",
+    "jsdom": "^27.0.1",
+    "playwright": "^1.56.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3"
   }
