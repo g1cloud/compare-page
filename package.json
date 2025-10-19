@@ -1,7 +1,7 @@
 {
   "name": "@g1cloud/compare-page",
-  "version": "1.0.0",
-  "description": "",
+  "version": "0.1.0",
+  "description": "Compares two web pages and outputs the differences.",
   "main": "dist/index.js",
   "bin": "dist/index.js",
   "scripts": {
